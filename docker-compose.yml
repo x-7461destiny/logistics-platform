@@ -3,7 +3,7 @@ version: '3.8'
 services:
   backend:
     build: .
-    command: gunicorn app.main:app_sio -k eventlet -w 1 -b 0.0.0.0:8000
+    command: python -m uvicorn app.main:app_asgi --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     depends_on:
@@ -12,50 +12,33 @@ services:
       - kafka
       - celery_worker
       - celery_beat
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - KAFKA_URL=${KAFKA_URL}
-      - SECRET_KEY=${SECRET_KEY}
-      - ALGORITHM=${ALGORITHM}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+    env_file:
+      - .env
 
   celery_worker:
     build: .
-    command: celery -A app.tasks worker --loglevel=info --autoscale=${MAX_WORKERS}:${MIN_WORKERS}
+    command: python -m celery -A app.tasks worker --loglevel=info --autoscale=10,2
     depends_on:
       - redis
       - postgres
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/logistics
-      - REDIS_URL=redis://redis:6379/0
-      - KAFKA_URL=kafka:9092
-      - MIN_WORKERS=2
-      - MAX_WORKERS=10
-      - SCALE_UP_THRESHOLD=100
-      - SCALE_DOWN_THRESHOLD=10
-      - CHECK_INTERVAL=60
+    env_file:
+      - .env
 
   celery_beat:
     build: .
-    command: celery -A app.tasks beat --loglevel=info
+    command: python -m celery -A app.tasks beat --loglevel=info
     depends_on:
       - redis
       - postgres
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/logistics
-      - REDIS_URL=redis://redis:6379/0
-      - KAFKA_URL=kafka:9092
+    env_file:
+      - .env
 
   postgres:
-    image: postgres:13
+    image: postgis/postgis:13-3.4
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: logistics
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -65,7 +48,7 @@ services:
       - "6379:6379"
 
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.5.0
     depends_on:
       - zookeeper
     ports:
@@ -114,7 +97,7 @@ services:
 
   location_consumer:
     build: .
-    command: python app/services/tracking/location_consumer.py
+    command: python -m app.services.tracking.location_consumer
     depends_on:
       - kafka
       - redis
@@ -124,7 +107,7 @@ services:
 
   booking_consumer:
     build: .
-    command: python app/services/booking/booking_consumer.py
+    command: python -m app.services.booking.booking_consumer
     depends_on:
       - kafka
       - redis
@@ -134,7 +117,7 @@ services:
 
   demand_consumer:
     build: .
-    command: python app/services/demand/demand_consumer.py
+    command: python -m app.services.demand.demand_consumer
     depends_on:
       - kafka
       - redis

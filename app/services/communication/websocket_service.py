@@ -1,10 +1,20 @@
 import logging
 
-import aioredis
 import socketio
 from app.dependencies import get_current_user
-from app.models import LocationUpdate
 from app.services.caching.cache import get_redis_client
+from app.services.tracking.tracking_service import TrackingService
+from circuitbreaker import circuit
+from fastapi import WebSocket, WebSocketDisconnect, status
+from opentelemetry import trace
+from pydantic import BaseModel, ValidationError
+
+
+class LocationUpdate(BaseModel):
+    driver_id: str
+    latitude: float
+    longitude: float
+
 from app.services.tracking.tracking_service import TrackingService
 from circuitbreaker import circuit
 from fastapi import WebSocket, WebSocketDisconnect, status

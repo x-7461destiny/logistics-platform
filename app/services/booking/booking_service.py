@@ -107,3 +107,7 @@ async def create_new_booking(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def update_booking_status(booking_id: int, status: str):
+    return None

@@ -3,21 +3,22 @@ from enum import Enum as PyEnum
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (JSON, Boolean, Column, DateTime, Enum, Float,
-                        ForeignKey, Index, Integer, String, Version)
+                        ForeignKey, Index, Integer, String)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
 
-class VehicleTypeEnum(str, Enum):
+class VehicleTypeEnum(str, PyEnum):
     refrigerated_truck = "refrigerated_truck"
     van = "van"
     truck = "truck"
 
 
-class BookingStatusEnum(str, Enum):
+class BookingStatusEnum(str, PyEnum):
     pending = "pending"
+    scheduled = "scheduled"
     confirmed = "confirmed"
     en_route = "en_route"
     goods_collected = "goods_collected"
@@ -106,6 +107,9 @@ class Booking(Base):
     scheduled_time = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="bookings")
     driver = relationship("Driver", back_populates="bookings")
+    status_history = relationship(
+        "BookingStatusHistory", back_populates="booking", cascade="all, delete-orphan"
+    )
     version = Column(Integer, nullable=False, server_default="0")
     __mapper_args__ = {"version_id_col": version}
 
@@ -113,6 +117,21 @@ class Booking(Base):
 # Create indexes for frequently queried fields
 Index("idx_booking_status", Booking.status)
 Index("idx_booking_driver_id", Booking.driver_id)
+
+
+class Pricing(Base):
+    __tablename__ = "pricing"
+    id = Column(Integer, primary_key=True, index=True)
+    vehicle_type = Column(String, nullable=False)
+    base_fare = Column(Float, nullable=False)
+    cost_per_km = Column(Float, nullable=False)
+
+
+class Analytics(Base):
+    __tablename__ = "analytics"
+    id = Column(Integer, primary_key=True, index=True)
+    metric = Column(String, nullable=False)
+    value = Column(Float, nullable=False)
 
 
 class MaintenancePeriod(Base):

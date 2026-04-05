@@ -1,10 +1,24 @@
-import aioredis
+import redis.asyncio as redis_asyncio
+from app.config import settings
 
-REDIS_URL = "redis://localhost"
+REDIS_URL = settings.REDIS_URL
 
 
 async def get_redis_client():
-    return await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+    return redis_asyncio.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+
+
+class Cache:
+    async def get(self, key):
+        redis = await get_redis_client()
+        return await redis.get(key)
+
+    async def set(self, key, value, expire=None):
+        redis = await get_redis_client()
+        await redis.set(key, value, ex=expire)
+
+
+cache = Cache()
 
 
 async def cache_driver_availability(driver_id: int, is_available: bool):

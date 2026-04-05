@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 
 class RoleName(str, Enum):
@@ -13,7 +13,7 @@ class RoleName(str, Enum):
 
 class UserBase(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     phone_number: str
 
 

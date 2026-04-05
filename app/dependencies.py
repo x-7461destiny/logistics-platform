@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timedelta
 from functools import wraps
 
-import aioredis
+import redis.asyncio as redis_asyncio
 import httpx
 from app.models import Driver, RoleEnum, User
 from db.database import get_db
@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 
-redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True, max_connections=10)
+redis = redis_asyncio.from_url(
+    settings.REDIS_URL, decode_responses=True, max_connections=10
+)
 
 
 class Settings(BaseSettings):
@@ -141,13 +143,27 @@ class SlidingWindowRateLimiter:
 rate_limiter = SlidingWindowRateLimiter(max_requests=100, window_size=60)
 
 
-def rate_limit():
-    async def wrapper(request: Request):
-        client_ip = request.client.host
-        if await rate_limiter.is_rate_limited(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+def rate_limit(max_calls=None, time_frame=None):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            request = kwargs.get("request")
+            if request is None:
+                for arg in args:
+                    if isinstance(arg, Request):
+                        request = arg
+                        break
 
-    return wrapper
+            if request is not None:
+                client_ip = request.client.host
+                if await rate_limiter.is_rate_limited(client_ip):
+                    raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 SECRET_KEY = "your-secret-key"

@@ -3,6 +3,11 @@ from typing import List
 from pydantic import BaseModel, Field
 
 
+class AnalyticsCreate(BaseModel):
+    metric: str = Field(..., description="Analytics metric name")
+    value: float = Field(..., description="Analytics metric value")
+
+
 class PopularPickupLocation(BaseModel):
     location: str = Field(..., description="Pickup location")
     count: int = Field(..., description="Number of bookings for this location")

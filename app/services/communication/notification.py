@@ -41,4 +41,4 @@ async def notify_nearby_drivers(booking_id: int, nearby_driver_ids: List[int]):
         }
     )
     for driver_id in nearby_driver_ids:
-        await manager.send_message_to_driver(str(driver_id), message)
+        await manager.send_message_to_driver(str(driver_id), "new_booking", message)

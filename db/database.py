@@ -6,7 +6,6 @@ from app.config import settings
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import QueuePool
 
 # Use environment variables for sensitive information
 POSTGRES_USER = os.getenv("POSTGRES_USER", "your_username")
@@ -22,7 +21,6 @@ SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL,
     echo=True,
-    poolclass=QueuePool,
     pool_size=20,
     max_overflow=40,
     pool_timeout=30,
@@ -31,6 +29,12 @@ engine = create_async_engine(
 
 # Create asynchronous sessionmaker
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session() as session:
+        yield session
+
 
 # Base class for models
 Base = declarative_base()

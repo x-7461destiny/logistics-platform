@@ -3,7 +3,7 @@ import logging
 
 import socketio
 from app.middleware.rate_limiter import RateLimiterMiddleware
-from app.models import Role, RoleEnum
+from app.models import Base, Role, RoleEnum
 from app.routes import (admin, analytics, bookings, drivers, pricing, tracking,
                         users, websockets)
 from app.services.analytics.analytics_consumer import start_analytics_consumer
@@ -11,17 +11,14 @@ from app.services.booking.booking_consumer import start_booking_consumer
 from app.services.driver_availability.driver_availability_consumer import \
     start_driver_availability_consumer
 from app.services.messaging.kafka_service import kafka_service
-from app.tasks.demand import update_demand
+from app.tasks import update_demand
 from db.database import async_session, engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.future import select
 
 from .config import settings
-
-Base = declarative_base()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")

@@ -1,8 +1,11 @@
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta
+from typing import Any, Dict
 
-import aioredis
+import redis.asyncio as redis_asyncio
 from app.models import Booking, BookingStatusEnum, Driver, User
 from celery import Celery
 from db.database import engine
@@ -18,14 +21,34 @@ logging.basicConfig(
 
 app = Celery("tasks", broker=settings.CELERY_BROKER_URL)
 
+KAFKA_TOPIC_DEMAND_UPDATES = "demand_updates"
+H3_INDEXES = ["8928308280fffff", "8928308283fffff"]
+
 
 async def get_redis_client():
-    return await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    return redis_asyncio.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 @app.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):
     sender.add_periodic_task(3600.0, compute_analytics.s(), name="compute every hour")
+
+
+async def update_demand():
+    from app.services.messaging.kafka_service import kafka_service
+
+    while True:
+        for h3_index in H3_INDEXES:
+            demand = 1.0 + (time.time() % 3600) / 3600
+            demand = min(demand, 2.5)
+            demand_data: Dict[str, Any] = {
+                "h3_index": h3_index,
+                "demand": demand,
+                "timestamp": int(time.time()),
+            }
+            await kafka_service.send_message(KAFKA_TOPIC_DEMAND_UPDATES, demand_data)
+
+        await asyncio.sleep(60)
 
 
 @app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -114,6 +137,12 @@ async def handle_booking_completion(self, booking_id: int):
         except Exception as e:
             logging.error(f"Error handling booking completion for {booking_id}: {e}")
             self.retry(exc=e)
+
+
+async def process_immediate_booking(booking_id: int):
+    from app.services.booking.immediate_booking import process_immediate_booking as service_process_immediate_booking
+
+    await service_process_immediate_booking(booking_id)
 
 
 @app.task

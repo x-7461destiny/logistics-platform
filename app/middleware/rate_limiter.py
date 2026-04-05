@@ -7,7 +7,7 @@ from starlette.responses import JSONResponse
 class RateLimiterMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         key = f"rate_limit:{request.client.host}"
-        if await rate_limiter.is_rate_limited(key, max_calls=100, time_frame=60):
+        if await rate_limiter.is_rate_limited(key):
             return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
         response = await call_next(request)
         return response

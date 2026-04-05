@@ -11,6 +11,16 @@ class VehicleType(str, Enum):
     premium = "premium"
 
 
+class PricingCreate(BaseModel):
+    vehicle_type: str = Field(..., description="Type of vehicle.")
+    base_fare: float = Field(..., ge=0, description="Base fare amount.")
+    cost_per_km: float = Field(..., ge=0, description="Cost per kilometer.")
+
+
+class PricingResponse(PricingCreate):
+    id: int
+
+
 class PricingSchema(BaseModel):
     pickup_latitude: float = Field(
         ..., ge=-90.0, le=90.0, description="Latitude of the pickup location."
