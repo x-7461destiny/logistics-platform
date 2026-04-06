@@ -4,8 +4,8 @@ import logging
 import socketio
 from app.middleware.rate_limiter import RateLimiterMiddleware
 from app.models import Base, Role, RoleEnum
-from app.routes import (admin, analytics, bookings, drivers, pricing, tracking,
-                        users, websockets)
+from app.routes import (admin, analytics, auth, bookings, drivers, pricing,
+                        tracking, users, websockets)
 from app.services.analytics.analytics_consumer import start_analytics_consumer
 from app.services.booking.booking_consumer import start_booking_consumer
 from app.services.driver_availability.driver_availability_consumer import \
@@ -46,6 +46,7 @@ app.add_middleware(
 
 app.add_middleware(RateLimiterMiddleware)
 app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
+app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["bookings"])
 app.include_router(tracking.router, prefix="/api/v1", tags=["tracking"])
 app.include_router(pricing.router, prefix="/api/v1", tags=["pricing"])

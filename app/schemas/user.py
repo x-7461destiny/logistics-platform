@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class RoleName(str, Enum):
@@ -19,7 +19,15 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
-    role: RoleName = RoleName.user
+
+
+class UserRegister(UserCreate):
+    pass
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
 
 
 class UserResponse(UserBase):
@@ -37,5 +45,7 @@ class Token(BaseModel):
 
 
 class TokenData(BaseModel):
-    user_id: Optional[int] = None
+    sub: Optional[str] = None
+    principal_id: Optional[int] = None
+    principal_type: Optional[str] = None
     role: Optional[RoleName] = None

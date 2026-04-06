@@ -9,10 +9,9 @@ from app.services.booking.booking_service import update_booking_status
 from app.services.messaging.kafka_service import (
     KAFKA_TOPIC_DRIVER_AVAILABILITY_UPDATES, KAFKA_TOPIC_DRIVER_LOCATIONS,
     kafka_service)
-from app.services.tracking import verify_token
 from app.services.tracking.location_update import update_driver_locations
 from fastapi import WebSocketDisconnect
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TrackingService:
@@ -61,14 +60,10 @@ class TrackingService:
             await self.handle_location_update(driver_id, data)
 
     async def websocket_connection(
-        self, websocket, driver_id: str, current_driver: Driver, db: Session
+        self, websocket, driver_id: str, current_driver: Driver, db: AsyncSession
     ):
         if str(current_driver.id) != driver_id:
             await websocket.close(code=4003)
-            return
-        token = websocket.query_params.get("token")
-        if not verify_token(token, driver_id):
-            await websocket.close(code=1008)
             return
         await self.manager.connect_driver(driver_id, websocket)
         try:

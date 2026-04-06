@@ -1,17 +1,19 @@
 import json
 import time
-from datetime import datetime, timedelta
 from functools import wraps
+from typing import Union
 
 import redis.asyncio as redis_asyncio
 import httpx
-from app.models import Driver, RoleEnum, User
+from app.models import Driver, Role, RoleEnum, User
+from app.schemas.user import TokenData
 from db.database import get_db
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseSettings
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
 
@@ -59,66 +61,105 @@ class RateLimiter:
         return False
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
-):
+async def decode_token(token: str) -> TokenData:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        token_data = TokenData(
+            sub=payload.get("sub"),
+            principal_id=payload.get("principal_id"),
+            principal_type=payload.get("principal_type"),
+            role=payload.get("role"),
         )
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
     except JWTError:
         raise credentials_exception
-    user = db.query(User).filter(User.email == username).first()
-    if user is None:
+
+    if (
+        token_data.sub is None
+        or token_data.principal_id is None
+        or token_data.principal_type is None
+        or token_data.role is None
+    ):
         raise credentials_exception
-    return user
+    return token_data
+
+
+async def get_current_principal(
+    token: str, db: AsyncSession
+) -> Union[User, Driver]:
+    token_data = await decode_token(token)
+
+    if token_data.principal_type == "user":
+        result = await db.execute(
+            select(User).join(Role, User.role_id == Role.id).where(User.id == token_data.principal_id)
+        )
+        principal = result.scalar_one_or_none()
+    elif token_data.principal_type == "driver":
+        result = await db.execute(
+            select(Driver)
+            .join(Role, Driver.role_id == Role.id)
+            .where(Driver.id == token_data.principal_id)
+        )
+        principal = result.scalar_one_or_none()
+    else:
+        principal = None
+
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return principal
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
+):
+    principal = await get_current_principal(token, db)
+    if not isinstance(principal, User):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User access required",
+        )
+    return principal
 
 
 async def get_current_driver(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
 ):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials for driver",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+    principal = await get_current_principal(token, db)
+    if not isinstance(principal, Driver):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Driver access required",
         )
-        user_id: int = payload.get("user_id")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    driver = db.query(Driver).filter(Driver.id == user_id).first()
-    if driver is None:
-        raise credentials_exception
-    return driver
+    return principal
 
 
 async def get_current_user_object(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
 ):
     return await get_current_user(token, db)
 
 
+async def resolve_principal_from_token(token: str, db: AsyncSession) -> Union[User, Driver]:
+    return await get_current_principal(token, db)
+
+
 async def get_current_admin(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
 ):
     user = await get_current_user(token, db)
-    if user.role.name != RoleEnum.admin:
+    user_role = user.role.name if user.role else None
+    if user_role != RoleEnum.admin:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return user
 
@@ -164,19 +205,6 @@ def rate_limit(max_calls=None, time_frame=None):
         return wrapper
 
     return decorator
-
-
-SECRET_KEY = "your-secret-key"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
 
 
 async def fetch_external_data(url: str, params: dict = None) -> dict:

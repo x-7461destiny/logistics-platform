@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from app.models import Booking, BookingStatusEnum, BookingStatusHistory, User
-from app.schemas.booking import BookingRequest, BookingResponse
+from app.schemas.booking import BookingRequest, BookingResponse, StatusUpdate
 from app.services.caching.cache import cache
 from app.services.messaging.kafka_service import (
     KAFKA_TOPIC_BOOKING_STATUS_UPDATES, KAFKA_TOPIC_BOOKING_UPDATES,
@@ -64,7 +64,7 @@ async def create_new_booking(
             db.add(status_history_entry)
 
             # Cache the booking
-            cache_key = f"booking:{booking_data.user_id}:{booking_data.pickup_latitude},{booking_data.pickup_longitude}:{booking_data.dropoff_latitude},{booking_data.dropoff_longitude}"
+            cache_key = f"booking:{current_user.id}:{booking_data.pickup_latitude},{booking_data.pickup_longitude}:{booking_data.dropoff_latitude},{booking_data.dropoff_longitude}"
             await cache.set(cache_key, {"id": booking.id, "price": price}, expire=300)
 
             # Publish booking creation event to Kafka
@@ -82,7 +82,6 @@ async def create_new_booking(
                 background_tasks.add_task(
                     schedule_booking_processing, booking.id, scheduled_time
                 )
-                booking_status = "scheduled"
                 booking_status_event = {
                     "booking_id": booking.id,
                     "status": "scheduled",
@@ -94,12 +93,23 @@ async def create_new_booking(
             else:
                 # Process immediate booking
                 background_tasks.add_task(process_immediate_booking, booking.id)
-                booking_status = "pending"
 
         return BookingResponse(
             booking_id=booking.id,
+            user_id=current_user.id,
+            driver_id=booking.driver_id,
+            pickup_location=f"POINT({booking_data.pickup_longitude} {booking_data.pickup_latitude})",
+            dropoff_location=f"POINT({booking_data.dropoff_longitude} {booking_data.dropoff_latitude})",
+            vehicle_type=booking.vehicle_type,
             price=price,
-            status=booking_status,
+            date=scheduled_time,
+            status=status,
+            status_history=[
+                StatusUpdate(
+                    status=status,
+                    timestamp=status_history_entry.timestamp,
+                )
+            ],
         )
 
     except ValueError as ve:

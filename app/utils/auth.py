@@ -2,12 +2,12 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.config import settings
-from app.models import User
-from app.schemas.user import TokenData
+from app.models import Driver, User
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -38,10 +38,26 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 async def authenticate_user(
     db: AsyncSession, email: str, password: str
 ) -> Optional[User]:
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(
+        select(User).options(selectinload(User.role)).where(User.email == email)
+    )
     user = result.scalar_one_or_none()
     if not user:
         return None
     if not verify_password(password, user.password_hash):
         return None
     return user
+
+
+async def authenticate_driver(
+    db: AsyncSession, email: str, password: str
+) -> Optional[Driver]:
+    result = await db.execute(
+        select(Driver).options(selectinload(Driver.role)).where(Driver.email == email)
+    )
+    driver = result.scalar_one_or_none()
+    if not driver:
+        return None
+    if not verify_password(password, driver.password_hash):
+        return None
+    return driver

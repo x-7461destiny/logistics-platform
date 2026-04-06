@@ -43,7 +43,6 @@ class BookingResponse(BaseModel):
 
 
 class BookingRequest(BaseModel):
-    user_id: int
     pickup_latitude: float
     pickup_longitude: float
     dropoff_latitude: float

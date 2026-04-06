@@ -7,10 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def create_user_service(user_data: UserCreate, db: AsyncSession) -> UserResponse:
-    hashed_password = get_password_hash(user_data.password)
-    role_result = await db.execute(
-        select(Role).where(Role.name == RoleEnum(user_data.role.value))
+    existing_user_result = await db.execute(
+        select(User).where(User.email == user_data.email)
     )
+    existing_user = existing_user_result.scalar_one_or_none()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    hashed_password = get_password_hash(user_data.password)
+    role_result = await db.execute(select(Role).where(Role.name == RoleEnum.user))
     role = role_result.scalar_one_or_none()
     new_user = User(
         email=user_data.email,
@@ -27,7 +32,7 @@ async def create_user_service(user_data: UserCreate, db: AsyncSession) -> UserRe
         name=new_user.name,
         email=new_user.email,
         phone_number=new_user.phone_number,
-        role=RoleName(role.name.value if role else user_data.role.value),
+        role=RoleName(role.name.value if role else RoleEnum.user.value),
         created_at=new_user.created_at,
     )
 

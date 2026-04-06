@@ -11,6 +11,7 @@
 python-dotenv
   h3
   python-jose
+  python-multipart
   websockets
   pytest
   httpx

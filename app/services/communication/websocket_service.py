@@ -1,10 +1,12 @@
 import logging
 
 import socketio
-from app.dependencies import get_current_user
+from app.dependencies import resolve_principal_from_token
+from app.models import Driver, User
 from app.services.caching.cache import get_redis_client
 from app.services.tracking.tracking_service import TrackingService
 from circuitbreaker import circuit
+from db.database import async_session
 from fastapi import WebSocket, WebSocketDisconnect, status
 from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
@@ -14,12 +16,6 @@ class LocationUpdate(BaseModel):
     driver_id: str
     latitude: float
     longitude: float
-
-from app.services.tracking.tracking_service import TrackingService
-from circuitbreaker import circuit
-from fastapi import WebSocket, WebSocketDisconnect, status
-from opentelemetry import trace
-from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -82,6 +78,16 @@ async def get_redis_connection_with_circuit_breaker():
     return await get_redis_client()
 
 
+def serialize_principal(principal):
+    is_driver = isinstance(principal, Driver)
+    return {
+        "id": principal.id,
+        "is_driver": is_driver,
+        "vehicle_type": getattr(principal, "vehicle_type", None),
+        "is_available": getattr(principal, "is_available", False),
+    }
+
+
 async def authenticate_websocket(websocket: WebSocket, is_driver: bool = False):
     token = websocket.headers.get("Authorization")
     if not token:
@@ -93,11 +99,16 @@ async def authenticate_websocket(websocket: WebSocket, is_driver: bool = False):
         token_type, token_value = token.split()
         if token_type.lower() != "bearer":
             raise ValueError("Invalid token type")
-        user = await get_current_user(token_value)
-        if not user:
-            raise ValueError("Invalid token")
-        if is_driver and not user.get("is_driver"):
+
+        async with async_session() as db:
+            principal = await resolve_principal_from_token(token_value, db)
+
+        if is_driver and not isinstance(principal, Driver):
             raise ValueError("User is not a driver")
+        if not is_driver and not isinstance(principal, User):
+            raise ValueError("Driver token not allowed")
+
+        user = serialize_principal(principal)
         logger.info(f"Authenticated {'driver' if is_driver else 'user'}: {user['id']}")
         return user
     except (ValueError, IndexError) as e:
@@ -117,9 +128,11 @@ async def connect(sid, environ):
         token_type, token_value = token.split()
         if token_type.lower() != "bearer":
             raise ValueError("Invalid token type")
-        user = await get_current_user(token_value)
-        if not user:
-            raise ValueError("Invalid token")
+
+        async with async_session() as db:
+            principal = await resolve_principal_from_token(token_value, db)
+
+        user = serialize_principal(principal)
         sio.environ[sid] = {"user": user}
         room = f"driver_{user['id']}" if user.get("is_driver") else f"user_{user['id']}"
         sio.enter_room(sid, room)
