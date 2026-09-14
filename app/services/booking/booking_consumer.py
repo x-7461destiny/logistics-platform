@@ -1,9 +1,7 @@
 import asyncio
-import json
 from datetime import datetime
 
 from app.services.caching.cache import get_redis_client
-from app.services.communication.notification import notify_driver_assignment
 from app.services.messaging.kafka_service import (
     KAFKA_TOPIC_BOOKING_STATUS_UPDATES, KAFKA_TOPIC_BOOKING_UPDATES,
     kafka_service)
@@ -28,9 +26,7 @@ async def handle_booking_update(booking_data):
         KAFKA_TOPIC_BOOKING_STATUS_UPDATES, booking_status_event
     )
 
-    if status == "confirmed":
-        # Notify driver about the assignment
-        await notify_driver_assignment(booking_data["driver_id"], booking_id)
+    # The booking processing service already publishes the assignment event.
 
 
 async def start_booking_consumer():

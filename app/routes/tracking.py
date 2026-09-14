@@ -3,7 +3,7 @@ import logging
 import h3
 from app.dependencies import get_current_user, resolve_principal_from_token
 from app.models import Driver, User
-from app.services.communication.websocket_service import ConnectionManager
+from app.services.communication.websocket_service import manager
 from app.services.tracking.tracking_service import TrackingService
 from db.database import get_db
 from fastapi import APIRouter, Depends, WebSocket, status
@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
-manager = ConnectionManager()
 tracking_service = TrackingService(manager)
 
 

@@ -13,6 +13,9 @@ from app.services.driver_availability.driver_availability_consumer import \
 from app.services.messaging.kafka_service import kafka_service
 from app.services.tracking.location_consumer import start_location_consumer
 from app.tasks import update_demand
+from app.services.communication.assignment_consumer import start_assignment_consumer
+from app.services.communication.websocket_service import sio, listen_native_notifications
+from app.services.demand.demand_consumer import start_demand_consumer
 from db.database import async_session, engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,12 +27,20 @@ from .config import settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# Initialize Socket.IO with Redis adapter
-sio = socketio.AsyncServer(
-    async_mode="asgi",
-    cors_allowed_origins=["*"],
-    adapter=socketio.RedisManager(settings.REDIS_URL),
-)
+# Retain background tasks until shutdown so errors and cancellation are observed.
+background_tasks = set()
+
+
+def start_background(coro):
+    task = asyncio.create_task(coro)
+    background_tasks.add(task)
+    def report_result(done):
+        if not done.cancelled() and done.exception() is not None:
+            logger.error("Background task failed", exc_info=(
+                type(done.exception()), done.exception(), done.exception().__traceback__
+            ))
+    task.add_done_callback(report_result)
+    return task
 
 app = FastAPI()
 
@@ -49,29 +60,18 @@ app.add_middleware(RateLimiterMiddleware)
 app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(bookings.router, prefix="/api/v1", tags=["bookings"])
+app.include_router(websockets.router, prefix="/api/v1", tags=["websockets"])
 app.include_router(tracking.router, prefix="/api/v1", tags=["tracking"])
 app.include_router(pricing.router, prefix="/api/v1", tags=["pricing"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
 app.include_router(drivers.router, prefix="/api/v1", tags=["drivers"])
 app.include_router(users.router, prefix="/api/v1", tags=["users"])
-app.include_router(websockets.router, prefix="/api/v1", tags=["websockets"])
 
 instrumentator = Instrumentator()
 instrumentator.instrument(app).expose(app)
 
 
-# Socket.IO Event Handlers
-@sio.event
-async def connect(sid, environ):
-    logger.info(f"Client connected: {sid}")
-
-
-@sio.event
-async def disconnect(sid):
-    logger.info(f"Client disconnected: {sid}")
-
-
-# Add other Socket.IO event handlers as needed
+# Socket.IO handlers are registered on the shared communication server.
 
 
 async def create_roles():
@@ -107,21 +107,45 @@ async def connect_to_db():
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(update_demand())
     await connect_to_db()
     await create_roles()
     await kafka_service.start()
+    ready = asyncio.Event()
+    listener = start_background(listen_native_notifications(ready))
+    waiter = asyncio.create_task(ready.wait())
+    try:
+        done, _ = await asyncio.wait(
+            [listener, waiter], timeout=15, return_when=asyncio.FIRST_COMPLETED
+        )
+        if listener in done:
+            await listener
+        if not ready.is_set():
+            raise RuntimeError("Notification listener did not become ready")
+    except BaseException:
+        await shutdown_event()
+        raise
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+    start_background(update_demand())
+    start_background(start_assignment_consumer())
+    start_background(start_demand_consumer())
 
     # Start Kafka consumers
-    asyncio.create_task(start_booking_consumer())
-    asyncio.create_task(start_driver_availability_consumer())
-    asyncio.create_task(start_location_consumer())
-    asyncio.create_task(start_analytics_consumer())
+    start_background(start_booking_consumer())
+    start_background(start_driver_availability_consumer())
+    start_background(start_location_consumer())
+    start_background(start_analytics_consumer())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    for task in background_tasks:
+        task.cancel()
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+    background_tasks.clear()
     await kafka_service.stop()
+    await engine.dispose()
 
 
 @app.get("/")

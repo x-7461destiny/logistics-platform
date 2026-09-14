@@ -1,4 +1,8 @@
+import asyncio
+import json
 import logging
+
+from app.config import settings
 
 import socketio
 from app.dependencies import resolve_principal_from_token
@@ -7,7 +11,7 @@ from app.services.caching.cache import get_redis_client
 from app.services.tracking.tracking_service import TrackingService
 from circuitbreaker import circuit
 from db.database import async_session
-from fastapi import WebSocket, WebSocketDisconnect, status
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect, status
 from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 
@@ -23,11 +27,11 @@ tracer = trace.get_tracer(__name__)
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*",
-    client_manager=None,  # We'll use Redis for scaling
+    client_manager=socketio.AsyncRedisManager(settings.REDIS_URL),
 )
 app_sio = socketio.ASGIApp(sio)
 
-sio.redis = socketio.RedisManager("redis://localhost:6379")
+NATIVE_NOTIFICATIONS_CHANNEL = "native_driver_notifications"
 
 
 class ConnectionManager:
@@ -36,28 +40,38 @@ class ConnectionManager:
         self.tracking_service = TrackingService(self)
         self.active_drivers = {}  # driver_id: sid
         self.active_users = {}  # user_id: sid
+        self.native_drivers = {}
 
     async def broadcast_to_users(self, event, message):
         await self.sio.emit(event, message, namespace="/")
 
     async def send_message_to_driver(self, driver_id: str, event, message):
-        sid = self.active_drivers.get(driver_id)
-        if sid:
-            await self.sio.emit(event, message, room=driver_id, namespace="/")
-        else:
-            logger.warning(f"Attempted to send message to inactive driver: {driver_id}")
+        await self.sio.emit(event, message, room=f"driver_{driver_id}", namespace="/")
+        redis = await get_redis_client()
+        try:
+            await redis.publish(NATIVE_NOTIFICATIONS_CHANNEL, json.dumps({
+                "driver_id": driver_id, "event": event, "data": message,
+            }))
+        finally:
+            await redis.aclose()
 
     async def send_personal_message(self, event, message, target_sid: str):
-        await self.sio.emit(event, message, room=target_sid, namespace="/")
+        if isinstance(target_sid, WebSocket):
+            await target_sid.send_json({"event": event, "data": message})
+        else:
+            await self.sio.emit(event, message, room=target_sid, namespace="/")
 
     async def connect_driver(self, driver_id: str, sid: str):
-        self.active_drivers[driver_id] = sid
+        if isinstance(sid, WebSocket):
+            self.native_drivers[driver_id] = sid
+        else:
+            self.active_drivers[driver_id] = sid
         logger.info(f"Driver {driver_id} connected with session ID {sid}")
 
-    async def disconnect_driver(self, driver_id: str):
-        if driver_id in self.active_drivers:
-            del self.active_drivers[driver_id]
-            logger.info(f"Driver {driver_id} disconnected")
+    async def disconnect_driver(self, driver_id: str, connection=None):
+        for connections in (self.native_drivers, self.active_drivers):
+            if connection is None or connections.get(driver_id) == connection:
+                connections.pop(driver_id, None)
 
     async def connect_user(self, user_id: str, sid: str):
         self.active_users[user_id] = sid
@@ -111,19 +125,17 @@ async def authenticate_websocket(websocket: WebSocket, is_driver: bool = False):
         user = serialize_principal(principal)
         logger.info(f"Authenticated {'driver' if is_driver else 'user'}: {user['id']}")
         return user
-    except (ValueError, IndexError) as e:
+    except (ValueError, IndexError, HTTPException) as e:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         logger.warning(f"WebSocket connection closed due to authentication error: {e}")
         return None
 
 
 @sio.event
-async def connect(sid, environ):
+async def connect(sid, environ, auth=None):
     token = environ.get("HTTP_AUTHORIZATION")
     if not token:
-        await sio.disconnect(sid)
-        logger.warning("Socket.IO connection closed due to missing token.")
-        return
+        return False
     try:
         token_type, token_value = token.split()
         if token_type.lower() != "bearer":
@@ -133,9 +145,9 @@ async def connect(sid, environ):
             principal = await resolve_principal_from_token(token_value, db)
 
         user = serialize_principal(principal)
-        sio.environ[sid] = {"user": user}
+        await sio.save_session(sid, {"user": user})
         room = f"driver_{user['id']}" if user.get("is_driver") else f"user_{user['id']}"
-        sio.enter_room(sid, room)
+        await sio.enter_room(sid, room)
         logger.info(
             f"Authenticated {'driver' if user.get('is_driver') else 'user'}: {user['id']}"
         )
@@ -143,18 +155,18 @@ async def connect(sid, environ):
             await manager.connect_driver(str(user["id"]), sid)
         else:
             await manager.connect_user(str(user["id"]), sid)
-    except (ValueError, IndexError) as e:
-        await sio.disconnect(sid)
+    except (ValueError, IndexError, HTTPException) as e:
         logger.warning(f"Socket.IO connection closed due to authentication error: {e}")
+        return False
 
 
 @sio.event
-async def disconnect(sid):
-    user = sio.environ.get(sid, {}).get("user")
+async def disconnect(sid, reason=None):
+    user = (await sio.get_session(sid)).get("user")
     if user:
         user_id = user["id"]
         if user.get("is_driver"):
-            await manager.disconnect_driver(str(user_id))
+            await manager.disconnect_driver(str(user_id), sid)
             logger.info(f"Driver {user_id} disconnected.")
         else:
             await manager.disconnect_user(str(user_id))
@@ -165,7 +177,7 @@ async def disconnect(sid):
 
 @sio.event
 async def update_location(sid, data):
-    user = sio.environ.get(sid, {}).get("user")
+    user = (await sio.get_session(sid)).get("user")
     if not user or not user.get("is_driver"):
         await sio.emit("error", {"message": "Unauthorized"}, room=sid)
         logger.warning(f"Unauthorized location update attempt from SID: {sid}")
@@ -186,9 +198,9 @@ async def update_location(sid, data):
         logger.error(f"Validation error from driver {user['id']}: {e}")
 
 
-@sio.event
+# Assignment notifications are produced by trusted booking services only.
 async def assign_booking(sid, booking):
-    user = sio.environ.get(sid, {}).get("user")
+    user = (await sio.get_session(sid)).get("user")
     if not user or not user.get("is_driver"):
         await sio.emit("error", {"message": "Unauthorized"}, room=sid)
         logger.warning(f"Unauthorized booking assignment attempt from SID: {sid}")
@@ -218,7 +230,8 @@ async def handle_driver_connection(websocket: WebSocket):
         return
 
     driver_id = str(user["id"])
-    await manager.connect_driver(driver_id, websocket.client)
+    await websocket.accept()
+    await manager.connect_driver(driver_id, websocket)
     try:
         while True:
             data = await websocket.receive_text()
@@ -234,11 +247,11 @@ async def handle_driver_connection(websocket: WebSocket):
             except ValidationError as e:
                 error_message = f"Invalid data format: {str(e)}"
                 await manager.send_personal_message(
-                    "error", error_message, websocket.client
+                    "error", error_message, websocket
                 )
                 logger.error(f"Validation error from driver {driver_id}: {e}")
     except WebSocketDisconnect:
-        await manager.disconnect_driver(driver_id)
+        await manager.disconnect_driver(driver_id, websocket)
     except Exception as e:
         logger.error(f"Error in handle_driver_connection: {str(e)}")
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
@@ -250,7 +263,8 @@ async def handle_user_connection(websocket: WebSocket):
         return
 
     user_id = str(user["id"])
-    await manager.connect_user(user_id, websocket.client)
+    await websocket.accept()
+    await manager.connect_user(user_id, websocket)
     try:
         redis = await get_redis_client()
         pubsub = redis.pubsub()
@@ -259,7 +273,7 @@ async def handle_user_connection(websocket: WebSocket):
         async for message in pubsub.listen():
             if message["type"] == "message":
                 await manager.send_personal_message(
-                    "driver_location_update", message["data"], websocket.client
+                    "driver_location_update", message["data"], websocket
                 )
     except WebSocketDisconnect:
         await manager.disconnect_user(user_id)
@@ -278,7 +292,8 @@ async def handle_driver_batch_connection(websocket: WebSocket):
         return
 
     driver_id = str(user["id"])
-    await manager.connect_driver(driver_id, websocket.client)
+    await websocket.accept()
+    await manager.connect_driver(driver_id, websocket)
     try:
         while True:
             data = await websocket.receive_json()
@@ -296,7 +311,7 @@ async def handle_driver_batch_connection(websocket: WebSocket):
                     except ValidationError as e:
                         error_message = f"Invalid data format: {str(e)}"
                         await manager.send_personal_message(
-                            "error", error_message, websocket.client
+                            "error", error_message, websocket
                         )
                         logger.error(
                             f"Batch validation error from driver {driver_id}: {e}"
@@ -306,11 +321,30 @@ async def handle_driver_batch_connection(websocket: WebSocket):
                     "Invalid data format. Expected a list of location updates."
                 )
                 await manager.send_personal_message(
-                    "error", error_message, websocket.client
+                    "error", error_message, websocket
                 )
                 logger.warning(f"Driver {driver_id} sent invalid batch data.")
     except WebSocketDisconnect:
-        await manager.disconnect_driver(driver_id)
+        await manager.disconnect_driver(driver_id, websocket)
     except Exception as e:
         logger.error(f"Error in handle_driver_batch_connection: {str(e)}")
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+
+async def listen_native_notifications(ready: asyncio.Event):
+    redis = await get_redis_client()
+    try:
+        async with redis.pubsub() as pubsub:
+            await pubsub.subscribe(NATIVE_NOTIFICATIONS_CHANNEL)
+            ready.set()
+            async for item in pubsub.listen():
+                if item["type"] != "message":
+                    continue
+                data = json.loads(item["data"])
+                websocket = manager.native_drivers.get(str(data["driver_id"]))
+                if websocket is not None:
+                    try:
+                        await websocket.send_json({"event": data["event"], "data": data["data"]})
+                    except Exception:
+                        logger.exception("Failed to send native driver notification")
+    finally:
+        await redis.aclose()

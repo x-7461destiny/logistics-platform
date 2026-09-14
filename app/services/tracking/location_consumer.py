@@ -9,9 +9,8 @@ from app.services.messaging.kafka_service import (KAFKA_TOPIC_DRIVER_LOCATIONS,
 LOCATION_TTL_SECONDS = 300
 
 
-async def handle_location_update(message):
+async def handle_location_update(location_data: dict):
     redis = await get_redis_client()
-    location_data = message.value if hasattr(message, "value") else message
     driver_id = location_data["driver_id"]
     h3_index = location_data["h3_index"]
     vehicle_type = location_data["vehicle_type"]
@@ -38,6 +37,7 @@ async def handle_location_update(message):
     await redis.expire(drivers_key, LOCATION_TTL_SECONDS)
 
     await redis.set(previous_h3_key, h3_index, ex=LOCATION_TTL_SECONDS)
+    await redis.publish("driver_locations", json.dumps(location_data))
 
 
 async def start_location_consumer():
