@@ -1,8 +1,7 @@
 from typing import Optional
 
 from app.models import Driver
-from app.services.caching.cache import cache_driver_availability
-from app.services.tracking.driver_tracking import assign_driver_to_booking
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -15,22 +14,18 @@ async def get_driver_from_db(driver_id: int, db: AsyncSession) -> Optional[Drive
     return result.scalar_one_or_none()
 
 
-async def assign_driver(driver_id: int, booking_id: int, db: AsyncSession) -> bool:
+async def assign_driver(driver_id: int, db: AsyncSession) -> Optional[Driver]:
     """
-    Assign a driver to a booking by updating their availability and booking status.
+    Atomically claim a driver by flipping availability in the database.
     """
-    driver = await get_driver_from_db(driver_id, db)
-    if not driver:
-        return False
+    result = await db.execute(
+        update(Driver)
+        .where(Driver.id == driver_id, Driver.is_available.is_(True))
+        .values(is_available=False)
+        .returning(Driver.id)
+    )
+    claimed_driver_id = result.scalar_one_or_none()
+    if claimed_driver_id is None:
+        return None
 
-    driver.is_available = False
-    await db.commit()
-    await db.refresh(driver)
-
-    # Cache the driver's availability
-    await cache_driver_availability(driver.id, False)
-
-    # Assign driver to booking in Redis for tracking
-    await assign_driver_to_booking(driver.id, booking_id)
-
-    return True
+    return await get_driver_from_db(claimed_driver_id, db)

@@ -8,6 +8,7 @@ from typing import Any, Dict
 import redis.asyncio as redis_asyncio
 from app.models import Booking, BookingStatusEnum, Driver, User
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 from db.database import engine
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,30 @@ app = Celery("tasks", broker=settings.CELERY_BROKER_URL)
 
 KAFKA_TOPIC_DEMAND_UPDATES = "demand_updates"
 H3_INDEXES = ["8928308280fffff", "8928308283fffff"]
+_worker_loop: asyncio.AbstractEventLoop | None = None
+
+
+@worker_process_init.connect
+def init_worker_event_loop(**kwargs):
+    global _worker_loop
+    _worker_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_loop)
+    _worker_loop.run_until_complete(engine.dispose())
+
+
+@worker_process_shutdown.connect
+def shutdown_worker_event_loop(**kwargs):
+    global _worker_loop
+    if _worker_loop is not None:
+        _worker_loop.close()
+        _worker_loop = None
+
+
+def run_async_in_worker(coro):
+    if _worker_loop is None:
+        raise RuntimeError("Celery worker event loop is not initialized")
+
+    return _worker_loop.run_until_complete(coro)
 
 
 async def get_redis_client():
@@ -109,9 +134,9 @@ async def compute_analytics(self):
 
 
 @app.task(bind=True, max_retries=3, default_retry_delay=60)
-async def handle_booking_completion(self, booking_id: int):
-    async with AsyncSession(engine) as db:
-        try:
+def handle_booking_completion(self, booking_id: int):
+    async def _handle():
+        async with AsyncSession(engine) as db:
             booking = await db.get(Booking, booking_id)
             if not booking:
                 logging.error(f"Booking not found for ID: {booking_id}")
@@ -121,22 +146,22 @@ async def handle_booking_completion(self, booking_id: int):
                 BookingStatusEnum.cancelled,
                 BookingStatusEnum.completed,
             ]:
-                # Update driver's availability
                 driver = await db.get(Driver, booking.driver_id)
                 if driver:
                     driver.is_available = True
                     await db.commit()
                     await db.refresh(driver)
 
-                # Update analytics
                 await compute_analytics()
 
             logging.info(f"Handled completion for booking ID: {booking_id}")
             return "Booking completion handled successfully."
 
-        except Exception as e:
-            logging.error(f"Error handling booking completion for {booking_id}: {e}")
-            self.retry(exc=e)
+    try:
+        return run_async_in_worker(_handle())
+    except Exception as e:
+        logging.error(f"Error handling booking completion for {booking_id}: {e}")
+        self.retry(exc=e)
 
 
 async def process_immediate_booking(booking_id: int):
@@ -146,34 +171,17 @@ async def process_immediate_booking(booking_id: int):
 
 
 @app.task
-async def schedule_booking_processing(booking_id: int, scheduled_time: datetime):
-    # Calculate countdown in seconds
-    countdown = (scheduled_time - datetime.utcnow()).total_seconds()
-    if countdown > 0:
-        # Schedule the process_scheduled_booking task
-        process_scheduled_booking.apply_async(args=[booking_id], countdown=countdown)
-    else:
-        # If scheduled_time is in the past, process immediately
-        await process_scheduled_booking(booking_id)
+def schedule_booking_processing(booking_id: int, scheduled_time: datetime):
+    countdown = max((scheduled_time - datetime.utcnow()).total_seconds(), 0)
+    process_scheduled_booking.apply_async(args=[booking_id], countdown=countdown)
 
 
-@app.task
-async def process_scheduled_booking(booking_id: int):
-    async with AsyncSession(engine) as db:
-        try:
-            # Fetch the booking
-            booking = await db.get(Booking, booking_id)
-            if not booking:
-                logging.error(f"Booking not found for ID: {booking_id}")
-                return
+@app.task(bind=True, max_retries=3, default_retry_delay=60)
+def process_scheduled_booking(self, booking_id: int):
+    from app.services.booking.scheduler import process_scheduled_booking as service_process_scheduled_booking
 
-            # Perform necessary processing for the scheduled booking
-            # Example: Update booking status, notify users, etc.
-            booking.status = BookingStatusEnum.completed
-            await db.commit()
-            logging.info(f"Processed scheduled booking ID: {booking_id}")
-
-        except Exception as e:
-            logging.error(f"Error processing scheduled booking {booking_id}: {e}")
-            # Optionally retry the task
-            process_scheduled_booking.retry(exc=e)
+    try:
+        return run_async_in_worker(service_process_scheduled_booking(booking_id))
+    except Exception as e:
+        logging.error(f"Error processing scheduled booking {booking_id}: {e}")
+        self.retry(exc=e)

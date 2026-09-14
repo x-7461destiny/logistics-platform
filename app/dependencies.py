@@ -14,6 +14,7 @@ from jose import JWTError, jwt
 from pydantic import BaseSettings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .config import settings
 
@@ -98,13 +99,15 @@ async def get_current_principal(
 
     if token_data.principal_type == "user":
         result = await db.execute(
-            select(User).join(Role, User.role_id == Role.id).where(User.id == token_data.principal_id)
+            select(User)
+            .options(selectinload(User.role))
+            .where(User.id == token_data.principal_id)
         )
         principal = result.scalar_one_or_none()
     elif token_data.principal_type == "driver":
         result = await db.execute(
             select(Driver)
-            .join(Role, Driver.role_id == Role.id)
+            .options(selectinload(Driver.role))
             .where(Driver.id == token_data.principal_id)
         )
         principal = result.scalar_one_or_none()

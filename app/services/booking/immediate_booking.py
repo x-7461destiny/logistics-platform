@@ -2,41 +2,37 @@ from datetime import datetime
 
 from app.models import Booking, BookingStatusEnum, BookingStatusHistory
 from app.services.assignment.matching import find_nearest_driver
+from app.services.caching.cache import cache_driver_availability
 from app.services.communication.notification import notify_driver_assignment
 from app.services.messaging.kafka_service import (KAFKA_TOPIC_BOOKING_UPDATES,
                                                   kafka_service)
-from app.services.validation.validation import validate_booking
-from db.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
+from db.database import async_session
 
 
 async def process_immediate_booking(booking_id: int):
-    async with get_db() as db:
+    async with async_session() as db:
         booking = await db.get(Booking, booking_id)
         if not booking:
-            # Handle missing booking
             return
 
         if booking.status != BookingStatusEnum.pending:
-            # Booking is not in pending status, possibly already processed
             return
 
-        # Assign driver
         assigned_driver = await find_nearest_driver(booking, db)
         if not assigned_driver:
-            # Handle no available driver
             booking.status = BookingStatusEnum.cancelled
+            status_history_entry = BookingStatusHistory(
+                booking_id=booking.id,
+                status=BookingStatusEnum.cancelled,
+                timestamp=datetime.utcnow(),
+            )
+            db.add(status_history_entry)
             await db.commit()
             return
 
-        # Validate booking time
-        await validate_booking(db, assigned_driver.vehicle.id, booking.date)
-
-        # Update booking with driver assignment
         booking.driver_id = assigned_driver.id
         booking.status = BookingStatusEnum.confirmed
 
-        # Add status change to BookingStatusHistory
         status_history_entry = BookingStatusHistory(
             booking_id=booking.id,
             status=BookingStatusEnum.confirmed,
@@ -45,11 +41,9 @@ async def process_immediate_booking(booking_id: int):
         db.add(status_history_entry)
 
         await db.commit()
+        await cache_driver_availability(assigned_driver.id, False)
 
-        # Notify driver about the assignment
         await notify_driver_assignment(assigned_driver.id, booking.id)
-
-        # Publish booking update to Kafka
         await kafka_service.send_message(
             KAFKA_TOPIC_BOOKING_UPDATES,
             {

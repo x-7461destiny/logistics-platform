@@ -4,6 +4,7 @@ from typing import Optional
 
 import h3
 import httpx
+from app.config import settings
 from app.schemas.pricing import PricingSchema
 from app.services.caching.cache import get_redis_client
 
@@ -27,7 +28,6 @@ PEAK_MULTIPLIER = 1.5
 OFF_PEAK_MULTIPLIER = 1.0
 
 # Google Maps API Configuration
-GOOGLE_MAPS_API_KEY = "YOUR_GOOGLE_MAPS_API_KEY"
 GOOGLE_DISTANCE_MATRIX_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
 
 
@@ -54,37 +54,63 @@ def get_h3_index(lat: float, lon: float) -> str:
     """
     Convert latitude and longitude to H3 index.
     """
-    return h3.geo_to_h3(lat, lon, H3_RESOLUTION)
+    return h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
+
+
+def calculate_approx_distance_duration(
+    pickup_lat: float, pickup_lng: float, dropoff_lat: float, dropoff_lng: float
+) -> dict:
+    earth_radius_km = 6371
+    lat1 = math.radians(pickup_lat)
+    lat2 = math.radians(dropoff_lat)
+    delta_lat = math.radians(dropoff_lat - pickup_lat)
+    delta_lng = math.radians(dropoff_lng - pickup_lng)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    straight_line_distance_km = earth_radius_km * c
+    distance_km = max(straight_line_distance_km * 1.2, 1.0)
+    duration_min = (distance_km / 30) * 60
+    return {"distance_km": distance_km, "duration_min": duration_min}
 
 
 async def get_distance_duration(
     pickup_lat: float, pickup_lng: float, dropoff_lat: float, dropoff_lng: float
-) -> Optional[dict]:
+) -> dict:
     """
     Use Google Maps Distance Matrix API to get distance in kilometers and duration in minutes.
+    Fall back to an approximate local calculation when the external API is unavailable.
     """
     params = {
         "origins": f"{pickup_lat},{pickup_lng}",
         "destinations": f"{dropoff_lat},{dropoff_lng}",
         "units": "metric",
-        "key": GOOGLE_MAPS_API_KEY,
+        "key": settings.GOOGLE_MAPS_API_KEY,
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(GOOGLE_DISTANCE_MATRIX_URL, params=params)
-        if response.status_code != 200:
-            return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(GOOGLE_DISTANCE_MATRIX_URL, params=params)
+        response.raise_for_status()
         data = response.json()
-        if data.get("status") != "OK":
-            return None
-        try:
-            element = data["rows"][0]["elements"][0]
-            if element["status"] != "OK":
-                return None
-            distance_km = element["distance"]["value"] / 1000  # meters to kilometers
-            duration_min = element["duration"]["value"] / 60  # seconds to minutes
-            return {"distance_km": distance_km, "duration_min": duration_min}
-        except (IndexError, KeyError):
-            return None
+        api_status = data.get("status")
+        if api_status != "OK":
+            raise ValueError(data.get("error_message") or api_status or "unknown error")
+
+        element = data["rows"][0]["elements"][0]
+        element_status = element.get("status")
+        if element_status != "OK":
+            raise ValueError(element_status)
+
+        distance_km = element["distance"]["value"] / 1000
+        duration_min = element["duration"]["value"] / 60
+        return {"distance_km": distance_km, "duration_min": duration_min}
+    except (httpx.HTTPError, KeyError, IndexError, ValueError):
+        return calculate_approx_distance_duration(
+            pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
+        )
 
 
 async def get_surge_multiplier(pickup_h3: str) -> float:
@@ -121,8 +147,6 @@ async def calculate_price(pricing_data: dict) -> float:
     distance_duration = await get_distance_duration(
         pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
     )
-    if not distance_duration:
-        raise ValueError("Unable to calculate distance and duration between locations.")
 
     distance = distance_duration["distance_km"]
     duration = distance_duration["duration_min"]

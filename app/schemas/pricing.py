@@ -1,14 +1,8 @@
 from datetime import datetime
-from enum import Enum
 from typing import Optional
 
+from app.models import VehicleTypeEnum
 from pydantic import BaseModel, Field, validator
-
-
-class VehicleType(str, Enum):
-    economy = "economy"
-    standard = "standard"
-    premium = "premium"
 
 
 class PricingCreate(BaseModel):
@@ -34,7 +28,7 @@ class PricingSchema(BaseModel):
     dropoff_longitude: float = Field(
         ..., ge=-180.0, le=180.0, description="Longitude of the dropoff location."
     )
-    vehicle_type: VehicleType = Field(
+    vehicle_type: VehicleTypeEnum = Field(
         ..., description="Type of vehicle selected for the booking."
     )
     scheduled_time: Optional[datetime] = Field(

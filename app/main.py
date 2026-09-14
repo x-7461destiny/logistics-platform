@@ -11,6 +11,7 @@ from app.services.booking.booking_consumer import start_booking_consumer
 from app.services.driver_availability.driver_availability_consumer import \
     start_driver_availability_consumer
 from app.services.messaging.kafka_service import kafka_service
+from app.services.tracking.location_consumer import start_location_consumer
 from app.tasks import update_demand
 from db.database import async_session, engine
 from fastapi import FastAPI
@@ -114,6 +115,7 @@ async def startup_event():
     # Start Kafka consumers
     asyncio.create_task(start_booking_consumer())
     asyncio.create_task(start_driver_availability_consumer())
+    asyncio.create_task(start_location_consumer())
     asyncio.create_task(start_analytics_consumer())
 
 

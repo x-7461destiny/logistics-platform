@@ -23,7 +23,19 @@ class StatusUpdate(BaseModel):
 
 class BookingResponse(BaseModel):
     booking_id: int = Field(..., description="Unique identifier for the booking.")
-    user_id: int = Field(..., description="ID of the user who made the booking.")
+    initial_status: BookingStatus = Field(
+        ..., description="Initial status at booking creation time."
+    )
+    processing: bool = Field(
+        ..., description="Whether asynchronous processing may still update the booking."
+    )
+    message: str = Field(
+        ..., description="Guidance to check the booking later for the latest status."
+    )
+
+
+class BookingDetailResponse(BaseModel):
+    booking_id: int = Field(..., description="Unique identifier for the booking.")
     driver_id: Optional[int] = Field(
         None, description="ID of the assigned driver, if any."
     )
@@ -36,9 +48,9 @@ class BookingResponse(BaseModel):
     vehicle_type: str = Field(..., description="Type of vehicle for the booking.")
     price: float = Field(..., description="Calculated price for the booking.")
     date: datetime = Field(..., description="Date and time of the booking.")
-    status: BookingStatus = Field(..., description="Current status of the booking.")
+    status: BookingStatus = Field(..., description="Current persisted booking status.")
     status_history: List[StatusUpdate] = Field(
-        default_factory=list, description="History of status updates."
+        default_factory=list, description="History of persisted booking status updates."
     )
 
 
@@ -48,4 +60,7 @@ class BookingRequest(BaseModel):
     dropoff_latitude: float
     dropoff_longitude: float
     vehicle_type: str
-    scheduled_time: Optional[datetime] = None
+    scheduled_time: Optional[datetime] = Field(
+        None,
+        description="Scheduled Beijing time. Naive input is treated as Asia/Shanghai (UTC+8).",
+    )

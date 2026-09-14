@@ -18,7 +18,7 @@ async def update_driver_locations(driver_updates: List[Dict[str, Any]]):
         longitude = update["longitude"]
         vehicle_type = update["vehicle_type"]
 
-        h3_index = h3.geo_to_h3(latitude, longitude, 9)  # Adjust resolution as needed
+        h3_index = h3.latlng_to_cell(latitude, longitude, 9)  # Adjust resolution as needed
 
         location_data = {
             "driver_id": driver_id,

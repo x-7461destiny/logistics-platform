@@ -1,3 +1,5 @@
+import json
+
 import redis.asyncio as redis_asyncio
 from app.config import settings
 
@@ -11,11 +13,18 @@ async def get_redis_client():
 class Cache:
     async def get(self, key):
         redis = await get_redis_client()
-        return await redis.get(key)
+        value = await redis.get(key)
+        if value is None:
+            return None
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
 
     async def set(self, key, value, expire=None):
         redis = await get_redis_client()
-        await redis.set(key, value, ex=expire)
+        serialized_value = json.dumps(value) if isinstance(value, (dict, list)) else value
+        await redis.set(key, serialized_value, ex=expire)
 
 
 cache = Cache()
@@ -23,7 +32,7 @@ cache = Cache()
 
 async def cache_driver_availability(driver_id: int, is_available: bool):
     redis = await get_redis_client()
-    await redis.set(f"driver:availability:{driver_id}", is_available)
+    await redis.set(f"driver:availability:{driver_id}", str(is_available))
     await redis.expire(f"driver:availability:{driver_id}", 3600)  # Cache for 1 hour
 
 
