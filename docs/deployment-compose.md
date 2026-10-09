@@ -23,6 +23,7 @@
    ```bash
    docker compose --env-file .env.production -f compose.production.yaml up -d
    curl --fail http://127.0.0.1:8080/health/ready
+   bash scripts/smoke.sh http://127.0.0.1:8080
    ```
 
 也可以检查容器自身的健康状态：
