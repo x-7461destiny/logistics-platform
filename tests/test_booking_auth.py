@@ -44,6 +44,7 @@ async def test_create_new_booking_uses_authenticated_user_for_cache_key_and_even
         begin=lambda: DummyTransaction(),
         add=add_object,
         flush=AsyncMock(),
+        commit=AsyncMock(),
         rollback=AsyncMock(),
     )
     background_tasks = BackgroundTasks()
@@ -59,6 +60,6 @@ async def test_create_new_booking_uses_authenticated_user_for_cache_key_and_even
     ):
         response = await create_new_booking(booking_data, current_user, db, background_tasks)
 
-    assert response.user_id == current_user.id
+    assert response.booking_id == created_objects[0].id
     assert cache_set.await_args.args[0].startswith("booking:42:")
     assert publish_event.await_args.args[1]["user_id"] == current_user.id

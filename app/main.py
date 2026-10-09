@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 import socketio
 from app.middleware.rate_limiter import RateLimiterMiddleware
@@ -21,6 +22,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy.future import select
+from sqlalchemy import text
+import redis.asyncio as redis_asyncio
 
 from .config import settings
 
@@ -50,7 +53,7 @@ app_asgi = socketio.ASGIApp(sio, app)
 # Add CORS middleware if necessary
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust as needed
+    allow_origins=[origin for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -92,8 +95,12 @@ async def connect_to_db():
     retries = 5
     while retries > 0:
         try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+            if os.getenv("AUTO_CREATE_TABLES", "1") == "1":
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+            else:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
             logger.info("Successfully connected to the database.")
             break
         except Exception as e:
@@ -151,6 +158,31 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Logistics Platform API"}
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    from fastapi import HTTPException
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        redis = redis_asyncio.from_url(settings.REDIS_URL)
+        try:
+            await redis.ping()
+        finally:
+            await redis.aclose()
+        if kafka_service.producer is None:
+            raise RuntimeError("Kafka producer is not ready")
+    except Exception:
+        logger.exception("Readiness check failed")
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

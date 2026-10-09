@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Test backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/logistics
+          REDIS_URL: redis://localhost:6379/0
+          KAFKA_URL: localhost:9092
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          SECRET_KEY: ci-only-not-for-production
+          GOOGLE_MAPS_API_KEY: ci-only
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production Compose
+        run: docker compose --env-file env.production.example -f compose.production.yaml config --quiet
+      - name: Build backend image
+        run: docker build -f Dockerfile.production -t logistics-backend:ci .
+      - name: Build frontend image
+        run: docker build -f frontend/Dockerfile -t logistics-web:ci frontend

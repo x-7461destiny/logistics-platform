@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 
 from app.config import settings
 
@@ -26,7 +27,7 @@ tracer = trace.get_tracer(__name__)
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",
+    cors_allowed_origins=([origin for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin] or None),
     client_manager=socketio.AsyncRedisManager(settings.REDIS_URL),
 )
 app_sio = socketio.ASGIApp(sio)

@@ -1,25 +1,25 @@
-  alembic
-  fastapi
-  uvicorn
-  sqlalchemy
-  redis
-  celery[redis]
-  kafka-python
-  geoalchemy2
-  asyncpg
-  pydantic<2
-python-dotenv
-  h3
-  python-jose
-  python-multipart
-  websockets
-  pytest
-  httpx
-  prometheus-fastapi-instrumentator
-  passlib[bcrypt]
-  bcrypt==4.0.1
-  circuitbreaker
-  opentelemetry-api
-  aiohttp
-  python-socketio
-  aiokafka
+alembic==1.18.4
+fastapi==0.125.0
+uvicorn==0.43.0
+sqlalchemy==2.0.49
+redis==6.4.0
+celery[redis]==5.6.3
+kafka-python==2.3.0
+geoalchemy2==0.18.4
+asyncpg==0.31.0
+pydantic==1.10.26
+python-dotenv==1.2.2
+h3==4.4.2
+python-jose==3.5.0
+python-multipart==0.0.32
+websockets==16.0
+pytest==9.0.2
+httpx==0.28.1
+prometheus-fastapi-instrumentator==7.1.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+circuitbreaker==2.1.3
+opentelemetry-api==1.40.0
+aiohttp==3.13.5
+python-socketio==5.16.1
+aiokafka==0.13.0

@@ -4,3 +4,9 @@
 *.env
 .cursorignore
 .cursorrules
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+.pytest_cache/
+.venv/
+.env.production
