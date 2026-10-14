@@ -52,6 +52,8 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare example environment
+        run: cp env.production.example .env.production
       - name: Validate production Compose
         run: docker compose --env-file env.production.example -f compose.production.yaml config --quiet
       - name: Build backend image
