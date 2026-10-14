@@ -60,6 +60,8 @@ jobs:
         run: docker build -f Dockerfile.production -t logistics-backend:ci .
       - name: Build frontend image
         run: docker build -f frontend/Dockerfile -t logistics-web:ci frontend
+      - name: Build PostGIS image
+        run: docker build -f Dockerfile.postgis -t logistics-postgis:ci .
 
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -77,11 +79,15 @@ jobs:
           - image: logistics-web
             context: ./frontend
             dockerfile: frontend/Dockerfile
+          - image: logistics-postgis
+            context: .
+            dockerfile: Dockerfile.postgis
     steps:
       - uses: actions/checkout@v4
       - name: Normalize image owner
         id: owner
         run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -94,6 +100,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ steps.owner.outputs.name }}/${{ matrix.image }}:${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}

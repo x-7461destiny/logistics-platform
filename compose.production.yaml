@@ -45,7 +45,7 @@ services:
     logging: *logging
 
   postgres:
-    image: postgis/postgis:16-3.4
+    image: ghcr.io/${IMAGE_OWNER}/logistics-postgis:${IMAGE_TAG}
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

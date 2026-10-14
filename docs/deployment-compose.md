@@ -1,8 +1,8 @@
 # 单机 Compose 部署准备
 
-生产配置使用 `compose.production.yaml`。`main` 分支的后端、前端测试和镜像构建验证通过后，CI 使用仓库的 `GITHUB_TOKEN` 将后端和前端镜像发布到 GHCR，标签为该提交的完整 Git SHA；PR 只验证，不发布。仓库设置需允许 GitHub Actions 使用具有 `packages: write` 权限的 `GITHUB_TOKEN`。服务器使用宿主机上的 HTTPS 代理将公网 80/443 转发到 `127.0.0.1:8080`。该端口只监听回环地址；数据库、Redis、Kafka 不发布宿主机端口。
+生产配置使用 `compose.production.yaml`。`main` 分支的后端、前端测试和镜像构建验证通过后，CI 使用仓库的 `GITHUB_TOKEN` 将后端、前端和基于官方 PostgreSQL 16 镜像的 PostGIS 镜像发布到 GHCR，标签为该提交的完整 Git SHA，支持 amd64 和 ARM64；PR 只验证，不发布。仓库设置需允许 GitHub Actions 使用具有 `packages: write` 权限的 `GITHUB_TOKEN`。服务器使用宿主机上的 HTTPS 代理将公网 80/443 转发到 `127.0.0.1:8080`。该端口只监听回环地址；数据库、Redis、Kafka 不发布宿主机端口。
 
-首次发布后，在 GitHub 仓库或账号的 Packages 页面检查 `logistics-backend` 和 `logistics-web` 都存在，且标签与提交 SHA 一致。GHCR 包默认可能为私有：若希望 VPS 无凭证拉取，需分别在包设置中改为 Public；否则在 VPS 上用具有 `read:packages` 权限的凭证登录 GHCR。公开代码仓库不等于镜像包自动公开。
+首次发布后，在 GitHub 仓库或账号的 Packages 页面检查 `logistics-backend`、`logistics-web` 和 `logistics-postgis` 都存在，且标签与提交 SHA 一致。GHCR 包默认可能为私有：若希望 VPS 无凭证拉取，需分别在包设置中改为 Public；否则在 VPS 上用具有 `read:packages` 权限的凭证登录 GHCR。公开代码仓库不等于镜像包自动公开。
 
 ## 首次启动
 
